@@ -8,6 +8,8 @@ import numpy as np
 
 class CellState(str, Enum):
     IDLE = "IDLE"
+    HOVER = "HOVER"
+    TOUCH_CANDIDATE = "TOUCH_CANDIDATE"
     CANDIDATE = "CANDIDATE"
     PRESSED = "PRESSED"
     RELEASED = "RELEASED"
@@ -34,8 +36,14 @@ class GridStateManager:
             return
         self.__init__(rows, columns, self.smoothing_frames, self.release_frames)
 
-    def update(self, confidence: np.ndarray, threshold: float) -> StateEvents:
+    def update(
+        self,
+        confidence: np.ndarray,
+        threshold: float,
+        hover_threshold: float = 0.25,
+    ) -> StateEvents:
         active = confidence >= threshold
+        hovering = (confidence >= hover_threshold) & ~active
         pressed_events: list[tuple[int, int]] = []
         released_events: list[tuple[int, int]] = []
 
@@ -45,11 +53,23 @@ class GridStateManager:
                 if active[row, col]:
                     self._hit_counts[row, col] += 1
                     self._miss_counts[row, col] = 0
-                    if state in (CellState.IDLE, CellState.RELEASED):
-                        self.states[row, col] = CellState.CANDIDATE.value
+                    if state in (CellState.IDLE, CellState.RELEASED, CellState.HOVER):
+                        self.states[row, col] = CellState.TOUCH_CANDIDATE.value
                     if self._hit_counts[row, col] >= self.smoothing_frames and state != CellState.PRESSED:
                         self.states[row, col] = CellState.PRESSED.value
                         pressed_events.append((row, col))
+                elif hovering[row, col]:
+                    self._hit_counts[row, col] = 0
+                    if state == CellState.PRESSED:
+                        self._miss_counts[row, col] += 1
+                        if self._miss_counts[row, col] >= self.release_frames:
+                            self.states[row, col] = CellState.RELEASED.value
+                            released_events.append((row, col))
+                    elif state == CellState.TOUCH_CANDIDATE:
+                        self._miss_counts[row, col] = 0
+                    else:
+                        self._miss_counts[row, col] = 0
+                        self.states[row, col] = CellState.HOVER.value
                 else:
                     self._hit_counts[row, col] = 0
                     if state == CellState.PRESSED:

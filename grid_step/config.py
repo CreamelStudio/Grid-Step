@@ -28,13 +28,26 @@ class AppSettings:
     shadow_threshold: int = 22
     shadow_cell_threshold: float = 0.05
     background_change_guard: float = 0.85
+    motion_threshold: int = 18
+    motion_cell_threshold: float = 0.025
+    motion_stop_threshold: float = 0.22
+    hover_confidence_threshold: float = 0.28
+    press_confidence_threshold: float = 0.62
+    touch_spike_hold_frames: int = 4
+    shoe_color_bgr: list[int] = field(default_factory=list)
+    shoe_color_threshold: int = 24
+    shoe_hue_threshold: int = 10
+    shoe_saturation_threshold: int = 45
+    shoe_value_threshold: int = 55
+    shoe_cell_threshold: float = 0.018
+    shadow_near_shoe_radius: int = 42
     ai_detection: bool = False
     onnx_model_path: str = "models/foot_detector.onnx"
     ai_confidence_threshold: float = 0.5
     min_area: int = 120
     smoothing_frames: int = 1
     release_frames: int = 2
-    detection_mode: str = "Hybrid"
+    detection_mode: str = "Touch"
     grid_line_thickness: int = 2
     show_grid: bool = True
     processing_scale: float = 1.0

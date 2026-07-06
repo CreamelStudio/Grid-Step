@@ -47,6 +47,7 @@ def bgr_to_pixmap(image_bgr: np.ndarray) -> QPixmap:
 
 class CameraCanvas(QWidget):
     points_changed = Signal(list)
+    color_picked = Signal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -55,6 +56,7 @@ class CameraCanvas(QWidget):
         self.points: list[list[float]] = []
         self._drag_index: int | None = None
         self._image_rect = QRectF()
+        self.pick_color_mode = False
         self.setMouseTracking(True)
 
     def set_frame(self, frame: np.ndarray, points: list[list[float]]) -> None:
@@ -94,13 +96,28 @@ class CameraCanvas(QWidget):
                 painter.drawText(point + QPointF(11, -7), str(idx + 1))
 
         painter.setPen(QColor("#e2e8f0"))
-        painter.drawText(16, 24, "Click four floor corners. Drag handles to refine.")
+        hint = "Click shoe color" if self.pick_color_mode else "Click four floor corners. Drag handles to refine."
+        painter.drawText(16, 24, hint)
 
     def mousePressEvent(self, event) -> None:
         if self.frame is None or event.button() != Qt.LeftButton:
             return
         image_point = self._widget_to_image(event.position())
         if image_point is None:
+            return
+        if self.pick_color_mode:
+            x = int(round(image_point.x()))
+            y = int(round(image_point.y()))
+            radius = 6
+            y0 = max(0, y - radius)
+            y1 = min(self.frame.shape[0], y + radius + 1)
+            x0 = max(0, x - radius)
+            x1 = min(self.frame.shape[1], x + radius + 1)
+            patch = self.frame[y0:y1, x0:x1]
+            bgr = np.median(patch.reshape(-1, 3), axis=0).astype(int).tolist()
+            self.pick_color_mode = False
+            self.color_picked.emit(bgr)
+            self.update()
             return
         nearest = self._nearest_point(event.position())
         if nearest is not None:
@@ -127,6 +144,10 @@ class CameraCanvas(QWidget):
     def reset_points(self) -> None:
         self.points = []
         self.points_changed.emit(self.points)
+        self.update()
+
+    def enable_color_pick(self) -> None:
+        self.pick_color_mode = True
         self.update()
 
     def _nearest_point(self, position: QPointF) -> int | None:
@@ -222,10 +243,16 @@ class TopDownCanvas(QWidget):
                 cell_rect = QRectF(x, y, cell_w, cell_h)
                 conf = 0.0 if self.confidence is None else float(self.confidence[row, col])
                 state = "" if self.states is None else str(self.states[row, col])
-                if state == "PRESSED" or conf >= 0.5:
+                if state == "PRESSED":
                     painter.fillRect(cell_rect, QColor(34, 197, 94, 105))
-                elif conf > 0.15:
+                elif state == "TOUCH_CANDIDATE":
+                    painter.fillRect(cell_rect, QColor(250, 204, 21, 85))
+                elif state == "HOVER":
+                    painter.fillRect(cell_rect, QColor(14, 165, 233, 65))
+                elif conf >= 0.5:
                     painter.fillRect(cell_rect, QColor(250, 204, 21, 70))
+                elif conf > 0.15:
+                    painter.fillRect(cell_rect, QColor(14, 165, 233, 45))
                 painter.setPen(QPen(QColor("#e0f2fe"), 1))
                 painter.drawRect(cell_rect)
                 painter.setPen(QColor("#f8fafc"))
@@ -252,6 +279,7 @@ class MainWindow(QMainWindow):
         self.current_confidence = np.zeros((self.settings.grid_rows, self.settings.grid_columns), dtype=np.float32)
         self.detection_running = False
         self.has_camera_frame = False
+        self._applying_settings = False
         self.camera_fps = FpsCounter()
         self.processing_fps = FpsCounter()
         self.perf = PerfStats()
@@ -285,6 +313,7 @@ class MainWindow(QMainWindow):
         self.camera_canvas = CameraCanvas()
         self.topdown_canvas = TopDownCanvas()
         self.camera_canvas.points_changed.connect(self._set_floor_corners)
+        self.camera_canvas.color_picked.connect(self._set_shoe_color)
         view_row.addWidget(self.camera_canvas, 1)
         view_row.addWidget(self.topdown_canvas, 1)
         main.addLayout(view_row, 1)
@@ -329,9 +358,11 @@ class MainWindow(QMainWindow):
         self.start_detection_btn = QPushButton("Start Detection")
         self.save_btn = QPushButton("Save Settings")
         self.load_btn = QPushButton("Load Settings")
+        self.pick_shoe_btn = QPushButton("Pick Shoe Color")
+        self.shoe_color_label = QLabel("Shoe: not set")
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Pixel", "Shadow", "Hybrid"])
+        self.mode_combo.addItems(["Touch", "Pixel", "Shadow", "Hybrid"])
         self.ai_check = QCheckBox("AI Detection")
         self.model_path = QLineEdit()
         self.browse_model_btn = QPushButton("Browse")
@@ -348,6 +379,12 @@ class MainWindow(QMainWindow):
         self.min_area_spin.setRange(0, 10000)
         self.smoothing_spin = QSpinBox()
         self.smoothing_spin.setRange(1, 10)
+        self.press_threshold_spin = QDoubleSpinBox()
+        self.press_threshold_spin.setRange(0.1, 0.95)
+        self.press_threshold_spin.setSingleStep(0.05)
+        self.press_threshold_spin.setDecimals(2)
+        self.shoe_threshold_spin = QSpinBox()
+        self.shoe_threshold_spin.setRange(5, 80)
         self.floor_w_spin = QDoubleSpinBox()
         self.floor_w_spin.setRange(0.1, 100.0)
         self.floor_w_spin.setSuffix(" m")
@@ -366,12 +403,14 @@ class MainWindow(QMainWindow):
             ("Shadow Threshold", self.shadow_threshold_spin),
             ("Min Area", self.min_area_spin),
             ("Smoothing", self.smoothing_spin),
+            ("Press Score", self.press_threshold_spin),
+            ("Shoe Threshold", self.shoe_threshold_spin),
             ("Floor Width", self.floor_w_spin),
             ("Floor Height", self.floor_h_spin),
         ]
         for idx, (label, widget) in enumerate(widgets):
-            row = idx // 6
-            col = (idx % 6) * 2
+            row = idx // 7
+            col = (idx % 7) * 2
             layout.addWidget(QLabel(label), row, col)
             layout.addWidget(widget, row, col + 1)
 
@@ -379,6 +418,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("ONNX Model"), 2, 2)
         layout.addWidget(self.model_path, 2, 3, 1, 4)
         layout.addWidget(self.browse_model_btn, 2, 7)
+        layout.addWidget(self.pick_shoe_btn, 2, 8)
+        layout.addWidget(self.shoe_color_label, 2, 9, 1, 4)
 
         buttons = [
             self.start_camera_btn,
@@ -402,6 +443,7 @@ class MainWindow(QMainWindow):
         self.save_btn.clicked.connect(self.save_settings)
         self.load_btn.clicked.connect(self.load_settings)
         self.browse_model_btn.clicked.connect(self.browse_model)
+        self.pick_shoe_btn.clicked.connect(self.pick_shoe_color)
         for widget in [
             self.rows_spin,
             self.cols_spin,
@@ -409,6 +451,8 @@ class MainWindow(QMainWindow):
             self.shadow_threshold_spin,
             self.min_area_spin,
             self.smoothing_spin,
+            self.press_threshold_spin,
+            self.shoe_threshold_spin,
             self.floor_w_spin,
             self.floor_h_spin,
         ]:
@@ -419,24 +463,34 @@ class MainWindow(QMainWindow):
         return box
 
     def _apply_settings_to_widgets(self) -> None:
+        self._applying_settings = True
         self.fps_spin.setValue(self.settings.target_fps)
         self.rows_spin.setValue(self.settings.grid_rows)
         self.cols_spin.setValue(self.settings.grid_columns)
-        self.mode_combo.setCurrentText(self.settings.detection_mode if self.settings.detection_mode in ["Pixel", "Shadow", "Hybrid"] else "Hybrid")
+        self.mode_combo.setCurrentText(
+            self.settings.detection_mode if self.settings.detection_mode in ["Touch", "Pixel", "Shadow", "Hybrid"] else "Touch"
+        )
         self.ai_check.setChecked(self.settings.ai_detection)
         self.model_path.setText(self.settings.onnx_model_path)
         self.pixel_threshold_spin.setValue(self.settings.pixel_threshold)
         self.shadow_threshold_spin.setValue(self.settings.shadow_threshold)
         self.min_area_spin.setValue(self.settings.min_area)
         self.smoothing_spin.setValue(self.settings.smoothing_frames)
+        self.press_threshold_spin.setValue(self.settings.press_confidence_threshold)
+        self.shoe_threshold_spin.setValue(self.settings.shoe_color_threshold)
+        self._update_shoe_color_label()
         self.floor_w_spin.setValue(self.settings.floor_width_m)
         self.floor_h_spin.setValue(self.settings.floor_height_m)
         resolution = f"{self.settings.resolution_width}x{self.settings.resolution_height}"
         index = self.resolution_combo.findText(resolution)
         if index >= 0:
             self.resolution_combo.setCurrentIndex(index)
+        self._applying_settings = False
+        self._read_widgets_to_settings()
 
     def _read_widgets_to_settings(self) -> None:
+        if self._applying_settings:
+            return
         resolution = self.resolution_combo.currentText().split("x")
         self.settings.camera_id = int(self.camera_combo.currentData())
         self.settings.resolution_width = int(resolution[0])
@@ -451,6 +505,8 @@ class MainWindow(QMainWindow):
         self.settings.shadow_threshold = self.shadow_threshold_spin.value()
         self.settings.min_area = self.min_area_spin.value()
         self.settings.smoothing_frames = self.smoothing_spin.value()
+        self.settings.press_confidence_threshold = self.press_threshold_spin.value()
+        self.settings.shoe_color_threshold = self.shoe_threshold_spin.value()
         self.settings.floor_width_m = self.floor_w_spin.value()
         self.settings.floor_height_m = self.floor_h_spin.value()
         self.state_manager.smoothing_frames = self.settings.smoothing_frames
@@ -532,6 +588,13 @@ class MainWindow(QMainWindow):
         if path:
             self.model_path.setText(path)
 
+    def pick_shoe_color(self) -> None:
+        if not self.has_camera_frame:
+            QMessageBox.warning(self, "Shoe Color", "Start the camera first, then click the shoe in the left camera view.")
+            return
+        self.camera_canvas.enable_color_pick()
+        self.status_label.setText("Click the shoe color in the left camera view.")
+
     def _set_floor_corners(self, points: list[list[float]]) -> None:
         old_corners = self.settings.floor_corners
         self.settings.floor_corners = [[float(x), float(y)] for x, y in points]
@@ -540,6 +603,25 @@ class MainWindow(QMainWindow):
             self.detection_running = False
             self.start_detection_btn.setText("Start Detection")
             self.status_label.setText("Floor corners changed. Capture the empty floor background again.")
+
+    def _set_shoe_color(self, bgr: list[int]) -> None:
+        self.settings.shoe_color_bgr = [int(v) for v in bgr[:3]]
+        self._update_shoe_color_label()
+        self.detector.update_settings(self.settings)
+        self.status_label.setText(
+            f"Shoe color picked BGR={self.settings.shoe_color_bgr}. Capture background again, then start Touch detection."
+        )
+
+    def _update_shoe_color_label(self) -> None:
+        if len(self.settings.shoe_color_bgr) != 3:
+            self.shoe_color_label.setText("Shoe: not set")
+            self.shoe_color_label.setStyleSheet("color: #cbd5e1;")
+            return
+        b, g, r = self.settings.shoe_color_bgr
+        self.shoe_color_label.setText(f"Shoe BGR: {b},{g},{r}")
+        self.shoe_color_label.setStyleSheet(
+            f"background: rgb({r}, {g}, {b}); color: #ffffff; padding: 4px; border-radius: 4px;"
+        )
 
     def _capture_stable_background(self, samples: int = 8, timeout_s: float = 1.0) -> np.ndarray:
         if self.current_topdown is None:
@@ -617,9 +699,15 @@ class MainWindow(QMainWindow):
             self.perf.processing_fps = self.processing_fps.tick()
             self.perf.pixel_ms = detection_result.timings_ms.get("pixel_ms", 0.0)
             self.perf.shadow_ms = detection_result.timings_ms.get("shadow_ms", 0.0)
+            self.perf.shoe_ms = detection_result.timings_ms.get("shoe_ms", 0.0)
+            self.perf.motion_ms = detection_result.timings_ms.get("motion_ms", 0.0)
             self.perf.onnx_ms = detection_result.timings_ms.get("onnx_ms", 0.0)
             self.current_confidence = detection_result.final_confidence
-            events = self.state_manager.update(self.current_confidence, 0.5)
+            events = self.state_manager.update(
+                self.current_confidence,
+                self.settings.press_confidence_threshold,
+                self.settings.hover_confidence_threshold,
+            )
             state = self.state_manager.as_json(self.current_confidence)
             self.output.publish(state, events.pressed, events.released)
             if detection_result.warning:
@@ -644,7 +732,9 @@ class MainWindow(QMainWindow):
         )
         self.status_label.setText(
             f"{status} | Camera FPS {self.perf.camera_fps:.1f} | Processing FPS {self.perf.processing_fps:.1f} | "
-            f"Pixel {self.perf.pixel_ms:.1f}ms | Shadow {self.perf.shadow_ms:.1f}ms | ONNX {self.perf.onnx_ms:.1f}ms | "
+            f"Pixel {self.perf.pixel_ms:.1f}ms | Shoe {self.perf.shoe_ms:.1f}ms | "
+            f"Shadow {self.perf.shadow_ms:.1f}ms | Motion {self.perf.motion_ms:.1f}ms | "
+            f"ONNX {self.perf.onnx_ms:.1f}ms | "
             f"Render {self.perf.render_ms:.1f}ms"
         )
 

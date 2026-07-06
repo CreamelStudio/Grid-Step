@@ -3,8 +3,41 @@
   "resolution_width": 1280,
   "resolution_height": 720,
   "target_fps": 60,
-  "floor_corners": [],
-  "homography_matrix": [],
+  "floor_corners": [
+    [
+      336.484619140625,
+      247.73594665527344
+    ],
+    [
+      916.5482788085938,
+      238.71156311035156
+    ],
+    [
+      1062.725341796875,
+      712.348876953125
+    ],
+    [
+      180.3446502685547,
+      709.7507934570312
+    ]
+  ],
+  "homography_matrix": [
+    [
+      2.021227756329942,
+      0.6830828947194794,
+      -849.3362393524951
+    ],
+    [
+      0.05836048611135034,
+      3.7512586854534766,
+      -948.9590275316731
+    ],
+    [
+      8.212429611430163e-05,
+      0.0016103081735243312,
+      1.0
+    ]
+  ],
   "grid_rows": 4,
   "grid_columns": 4,
   "floor_width_m": 2.0,
@@ -16,13 +49,26 @@
   "shadow_threshold": 22,
   "shadow_cell_threshold": 0.05,
   "background_change_guard": 0.85,
+  "motion_threshold": 18,
+  "motion_cell_threshold": 0.025,
+  "motion_stop_threshold": 0.22,
+  "hover_confidence_threshold": 0.28,
+  "press_confidence_threshold": 0.62,
+  "touch_spike_hold_frames": 4,
+  "shoe_color_bgr": [],
+  "shoe_color_threshold": 24,
+  "shoe_hue_threshold": 10,
+  "shoe_saturation_threshold": 45,
+  "shoe_value_threshold": 55,
+  "shoe_cell_threshold": 0.018,
+  "shadow_near_shoe_radius": 42,
   "ai_detection": false,
   "onnx_model_path": "models/foot_detector.onnx",
   "ai_confidence_threshold": 0.5,
   "min_area": 120,
   "smoothing_frames": 1,
   "release_frames": 2,
-  "detection_mode": "Hybrid",
+  "detection_mode": "Touch",
   "grid_line_thickness": 2,
   "show_grid": true,
   "processing_scale": 1.0

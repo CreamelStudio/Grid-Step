@@ -11,7 +11,7 @@ The MVP prioritizes latency: camera capture runs on a dedicated latest-frame thr
 - Homography-based top-down floor preview
 - Configurable rows, columns, floor dimensions, thresholds, smoothing, and detection mode
 - Empty-floor background capture
-- Pixel difference, shadow detection, and hybrid confidence modes
+- Touch, pixel difference, shadow detection, and hybrid confidence modes
 - Per-cell `IDLE`, `CANDIDATE`, `PRESSED`, `RELEASED` state management
 - Real-time FPS and processing latency display
 - Optional ONNX Runtime detector that fails gracefully when disabled, missing, or unavailable
@@ -43,9 +43,10 @@ python -m grid_step.main
 4. Click the four corners of the usable floor area on the left camera view.
 5. Drag the circular handles until the right preview looks like a clean top-down floor.
 6. Set grid rows and columns.
-7. Make sure nobody is on the floor, then click `Capture Background`.
-8. Choose `Pixel`, `Shadow`, or `Hybrid`.
-9. Click `Start Detection`.
+7. Click `Pick Shoe Color`, then click the shoe in the left camera view.
+8. Make sure nobody is on the floor, then click `Capture Background`.
+9. Choose `Touch` for footstep-style input, or `Pixel`, `Shadow`, or `Hybrid` for raw testing.
+10. Click `Start Detection`.
 
 Pressed and released events are printed to the console:
 
@@ -61,6 +62,10 @@ The current state is also held as a JSON-compatible object in `OutputManager`, s
 `Pixel` compares the current calibrated frame to the empty-floor background using `absdiff`, grayscale conversion, blur, thresholding, and morphology.
 
 `Shadow` compares LAB lightness against the background with global brightness compensation, then filters small regions.
+
+`Touch` is the default mode for footstep-style input. It separates "foot candidate inside a cell" from "touchdown-like timing" by combining shoe-color occupancy, background occupancy, local contact shadow, frame-to-frame motion, and short motion-stop history. Blue means `HOVER`, yellow means `TOUCH_CANDIDATE`, and green means `PRESSED`.
+
+When a shoe color is picked, `Touch` mode uses that color as the first foot candidate. Shadow pixels are only counted near the detected shoe-color region, which helps reject body shadows far away from the actual foot.
 
 `Hybrid` combines pixel and shadow confidence. If AI detection is off, AI weight is removed and the remaining weights are normalized. If AI detection is on, the app combines pixel, shadow, and the latest asynchronous ONNX result.
 
@@ -82,7 +87,10 @@ The current parser supports common box-like outputs shaped like `N x 5+` (`x0, y
 
 - Use 60 FPS camera input where possible.
 - Keep the floor ROI tightly around the usable area.
-- Start with `Hybrid` mode and AI off.
+- Start with `Touch` mode and AI off.
+- If cells flicker green, raise `Press Score` to `0.75` or raise `Min Area`.
+- If feet are visible but never press, lower `Press Score` to `0.60` or lower `Pixel Threshold`.
+- Start `Shoe Threshold` around `24`. If the shoe is not detected, raise it to `30-40`. If pants or floor are mistaken for the shoe, lower it to `12-20` and pick the shoe color again.
 - Lower camera resolution if the CPU cannot keep up.
 - Keep `smoothing_frames` at 1 or 2 for fastest response.
 - Recapture background after major lighting changes.

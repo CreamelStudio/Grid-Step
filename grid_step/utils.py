@@ -34,6 +34,8 @@ class PerfStats:
     total_latency_ms: float = 0.0
     pixel_ms: float = 0.0
     shadow_ms: float = 0.0
+    shoe_ms: float = 0.0
+    motion_ms: float = 0.0
     onnx_ms: float = 0.0
     render_ms: float = 0.0
     extra: dict[str, float] = field(default_factory=dict)
