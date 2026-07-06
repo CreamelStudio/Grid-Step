@@ -1,0 +1,4 @@
+numpy>=1.24
+opencv-python>=4.8
+PySide6>=6.6
+onnxruntime>=1.16
